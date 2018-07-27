@@ -1,63 +1,62 @@
 from __future__ import print_function
-
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from PIL import Image
+from PIL import Image, ImageFont, ImageDraw
 import matplotlib.pyplot as plt
 
 import torchvision.transforms as transforms
 import torchvision.models as models
 
 import copy
-
+import os.path
+import torchvision.utils
+import time
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
+
+parser = argparse.ArgumentParser(description='PyTorch Neural-Style')
+parser.add_argument('--content', default='')
+parser.add_argument('--size', type=int, default=512)
+parser.add_argument('--style', default='')
+parser.add_argument('--output', default='')
+parser.add_argument('--class_type', default='Style')  # Artist
+parser.add_argument('--num_steps', type=int, default=300)
+parser.add_argument('--style_weight', type=float, default=1e6)
+parser.add_argument('--content_weight', type=float, default=1)
+parser.add_argument('--mode', default='file')  # folder
+parser.add_argument('--content_folder', default='')
+parser.add_argument('--style_folder', default='')
+parser.add_argument('--output_folder', default='')
+parser.add_argument('--sum_img_name', default='')
+parser.add_argument('--content_layers', type=str, nargs='+')
+parser.add_argument('--style_layers', type=str, nargs='+')
+parser.add_argument('--lr', type=float, default=1)
+
+args = parser.parse_args()
+print(time.asctime(time.localtime(time.time())))
+for name, value in vars(args).items():
+    print('{} = {}'.format(name, value))
+
 
 
 # desired size of the output image
-imsize = 512 if torch.cuda.is_available() else 128  # use small size if no gpu
+imsize = args.size
 
 loader = transforms.Compose([
-    transforms.Resize(imsize),  # scale imported image
+    transforms.Resize((imsize, imsize)),  # scale imported image
     transforms.ToTensor()])  # transform it into a torch tensor
 
 
 def image_loader(image_name):
-    image = Image.open(image_name)
+    image = Image.open(image_name).convert(mode='RGB')
     # fake batch dimension required to fit network's input dimensions
     image = loader(image).unsqueeze(0)
     return image.to(device, torch.float)
 
 
-style_img = image_loader("images/picasso.jpg")
-content_img = image_loader("images/dancing.jpg")
-
-assert style_img.size() == content_img.size(), \
-    "we need to import style and content images of the same size"
-
-
-unloader = transforms.ToPILImage()  # reconvert into PIL image
-
-plt.ion()
-
-def imshow(tensor, title=None):
-    image = tensor.cpu().clone()  # we clone the tensor to not do changes on it
-    image = image.squeeze(0)      # remove the fake batch dimension
-    image = unloader(image)
-    plt.imshow(image)
-    if title is not None:
-        plt.title(title)
-    plt.pause(0.001) # pause a bit so that plots are updated
-
-
-plt.figure()
-imshow(style_img, title='Style Image')
-
-plt.figure()
-imshow(content_img, title='Content Image')
 
 
 class ContentLoss(nn.Module):
@@ -99,13 +98,25 @@ class StyleLoss(nn.Module):
         self.loss = F.mse_loss(G, self.target)
         return input
 
-
-vgg19_path = '/media/gisdom/2TB_2/luyue/examples/imagenet/checkpoint_test/checkpoint.pth'
-vgg19 = models.vgg19()
-vgg19.classifier._modules['6'] = nn.Linear(4096, 27)
-vgg19.load_state_dict(torch.load(vgg19_path))
-cnn = vgg19.features.to(device).eval()
-
+print("=> creating model")
+if args.class_type == 'Artist':
+    model_path = '/media/gisdom/2TB_2/luyue/examples/imagenet/archive/artist/checkpoint_epoch87.pth.tar'
+    vgg19 = models.vgg19()
+    vgg19.classifier._modules['6'] = nn.Linear(4096, 23)
+    print("=> loading state_dict".format(model_path))
+    vgg19_data = torch.load(model_path)
+    vgg19.load_state_dict(vgg19_data['state_dict'])
+    cnn = vgg19.features.to(device).eval()
+if args.class_type == 'Style':
+    model_path = '/media/gisdom/2TB_2/luyue/examples/imagenet/archive/style/checkpoint_epoch37.pth.tar'
+    vgg19 = models.vgg19()
+    vgg19.classifier._modules['6'] = nn.Linear(4096, 18)
+    print("=> loading state_dict".format(model_path))
+    vgg19_data = torch.load(model_path)
+    vgg19.load_state_dict(vgg19_data['state_dict'])
+    cnn = vgg19.features.to(device).eval()
+if args.class_type == 'ori_vgg19':
+    cnn = models.vgg19(pretrained=True).features.to(device).eval()
 
 cnn_normalization_mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
 cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225]).to(device)
@@ -127,8 +138,14 @@ class Normalization(nn.Module):
 
 
 # desired depth layers to compute style/content losses :
-content_layers_default = ['conv_4']
-style_layers_default = ['conv_1', 'conv_2', 'conv_3', 'conv_4', 'conv_5']
+# content_layers_default = ['conv_4']
+# style_layers_default = ['conv_1', 'conv_2', 'conv_3', 'conv_4', 'conv_5']
+
+content_layers_default = ['conv_'+i for i in args.content_layers]
+style_layers_default = ['conv_'+i for i in args.style_layers]
+
+print('content_layers_default={}'.format(content_layers_default))
+print('style_layers_default={}'.format(style_layers_default))
 
 def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
                                style_img, content_img,
@@ -192,18 +209,15 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
     return model, style_losses, content_losses
 
 
-input_img = content_img.clone()
 # if you want to use a white noise instead uncomment the below line:
 # input_img = torch.randn(content_img.data.size(), device=device)
 
 # add the original input image to the figure:
-plt.figure()
-imshow(input_img, title='Input Image')
 
 
 def get_input_optimizer(input_img):
     # this line to show that input is a parameter that requires a gradient
-    optimizer = optim.LBFGS([input_img.requires_grad_()])
+    optimizer = optim.LBFGS([input_img.requires_grad_()], lr=args.lr)
     return optimizer
 
 
@@ -214,6 +228,7 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
     print('Building the style transfer model..')
     model, style_losses, content_losses = get_style_model_and_losses(cnn,
         normalization_mean, normalization_std, style_img, content_img)
+
     optimizer = get_input_optimizer(input_img)
 
     print('Optimizing..')
@@ -238,6 +253,7 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
             content_score *= content_weight
 
             loss = style_score + content_score
+
             loss.backward()
 
             run[0] += 1
@@ -245,8 +261,6 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
                 print("run {}:".format(run))
                 print('Style Loss : {:4f} Content Loss: {:4f}'.format(
                     style_score.item(), content_score.item()))
-                print()
-
             return style_score + content_score
 
         optimizer.step(closure)
@@ -254,15 +268,104 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
     # a last correction...
     input_img.data.clamp_(0, 1)
 
-    return input_img
+    model(input_img)
+    style_score = 0
+    content_score = 0
+    for sl in style_losses:
+        style_score += sl.loss
+    for cl in content_losses:
+        content_score += cl.loss
+    style_score *= style_weight
+    content_score *= content_weight
+
+    return [input_img, content_score, style_score]
 
 
-output = run_style_transfer(cnn, cnn_normalization_mean, cnn_normalization_std,
-                            content_img, style_img, input_img)
 
-plt.figure()
-imshow(output, title='Output Image')
+if args.mode == 'file':
+    if not os.path.exists(os.path.dirname(args.output)):
+        os.mkdir(os.path.dirname(args.output))
+    style_img = image_loader(args.style)
+    content_img = image_loader(args.content)
+    assert style_img.size() == content_img.size(), \
+        "we need to import style and content images of the same size"
+    input_img = content_img.clone()
+    output, content_loss, style_loss = run_style_transfer(cnn, cnn_normalization_mean, cnn_normalization_std,
+                                content_img, style_img, input_img, num_steps=args.num_steps,
+                                style_weight=args.style_weight, content_weight=args.content_weight)
+    # torchvision.utils.save_image(output, args.output)
 
-# sphinx_gallery_thumbnail_number = 4
-plt.ioff()
-plt.show()
+    to_pil = transforms.ToPILImage()
+    output = to_pil(torch.squeeze(output.data).cpu())
+    draw = ImageDraw.Draw(output)
+    font = ImageFont.truetype("./simsun.ttc", 40)
+    draw.text(xy=(0, 0), text='c_loss={:.1f}\ns_loss={:.1f}'.format(content_loss, style_loss),
+              font=font, fill='#ffffff')
+
+    img_sum = Image.new('RGB', (args.size*3, args.size), (255, 255, 255))
+    img_sum.paste(Image.open(args.style), (0, 0))
+    img_sum.paste(Image.open(args.content), (args.size, 0))
+    img_sum.paste(output, (args.size*2, 0))
+    img_sum.save(args.output)
+    print('Save image {}'.format(args.output))
+
+if args.mode == 'folder':
+    if not os.path.exists(args.output_folder):
+        os.mkdir(args.output_folder)
+    contents = os.listdir(args.content_folder)
+    styles = os.listdir(args.style_folder)
+    contents = [i for i in contents if not i.startswith('.')]
+    styles = [i for i in styles if not i.startswith('.')]
+
+    contents_path = args.content_folder
+    styles_path = args.style_folder
+    output_path = args.output_folder
+    width = args.size + 120
+    height = args.size + 120
+    width_sum = width * (len(styles) + 1)
+    height_sum = height * (len(contents) + 1)
+    img_sum = Image.new('RGB', (width_sum, height_sum), (255, 255, 255))
+    print('contents {}'.format(contents))
+    print('styles {}'.format(styles))
+    font = ImageFont.truetype("./simsun.ttc", 40)
+
+    for i_content, content in enumerate(contents):
+        for i_style, style in enumerate(styles):
+            print('')
+            print(time.asctime(time.localtime(time.time())))
+            content_img = image_loader(os.path.join(args.content_folder, content))
+            style_img = image_loader(os.path.join(args.style_folder, style))
+            print('content: {}\t style: {}'.format(content, style))
+            assert style_img.size() == content_img.size(), \
+                "we need to import style and content images of the same size"
+            input_img = content_img.clone()
+            output, content_loss, style_loss = run_style_transfer(cnn, cnn_normalization_mean, cnn_normalization_std,
+                                        content_img, style_img, input_img, num_steps=args.num_steps,
+                                        style_weight=args.style_weight, content_weight=args.content_weight)
+            output_name = os.path.splitext(content)[0] + '_' + os.path.splitext(style)[0] + '.png'
+            torchvision.utils.save_image(output, os.path.join(args.output_folder, output_name))
+            print('Save image {}'.format(output_name))
+
+            to_pil = transforms.ToPILImage()
+            output = to_pil(torch.squeeze(output.data).cpu())
+            img_sum.paste(output, (i_style * width + width, i_content * height + height ))
+            draw = ImageDraw.Draw(img_sum)
+            draw.text(xy=(i_style * width + width , i_content * height + height - 80),
+                      text='c_loss={:.1f}\ns_loss={:.1f}'.format(content_loss, style_loss),
+                      font=font, fill='#000000')
+
+    for i, content in enumerate(contents):
+        img = Image.open(os.path.join(contents_path, content))
+        img = img.resize((args.size, args.size))
+        img_sum.paste(img, (0, i * height + height))
+
+    for i, style in enumerate(styles):
+        img = Image.open(os.path.join(styles_path, style))
+        img = img.resize((args.size, args.size))
+        img_sum.paste(img, (i * width + width, 0))
+
+    img_sum.save(os.path.join(output_path, args.sum_img_name))
+    print('Save image {}'.format(args.sum_img_name))
+
+print(time.asctime(time.localtime(time.time())))
+print('finish')
