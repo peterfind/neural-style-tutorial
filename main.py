@@ -16,13 +16,33 @@ import os.path
 import torchvision.utils
 import time
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device0 = torch.device('cuda:0')
+device1 = torch.device('cuda:1')
+# parser = argparse.ArgumentParser(description='PyTorch Neural-Style')
+# parser.add_argument('--content', default='')
+# parser.add_argument('--size', type=int, default=512)
+# parser.add_argument('--style', default='')
+# parser.add_argument('--output', default='')
+# parser.add_argument('--class_type', default='Style')  # Artist
+# parser.add_argument('--num_steps', type=int, default=300)
+# parser.add_argument('--style_weight', type=float, default=1e6)
+# parser.add_argument('--content_weight', type=float, default=1)
+# parser.add_argument('--mode', default='file')  # folder
+# parser.add_argument('--content_folder', default='')
+# parser.add_argument('--style_folder', default='')
+# parser.add_argument('--output_folder', default='')
+# parser.add_argument('--sum_img_name', default='')
+# parser.add_argument('--content_layers', type=str, nargs='+')
+# parser.add_argument('--style_layers', type=str, nargs='+')
+# parser.add_argument('--lr', type=float, default=1)
 
+## for debug
 parser = argparse.ArgumentParser(description='PyTorch Neural-Style')
-parser.add_argument('--content', default='')
+parser.add_argument('--content', default='./image/0728/horse.jpg')
 parser.add_argument('--size', type=int, default=512)
-parser.add_argument('--style', default='')
-parser.add_argument('--output', default='')
-parser.add_argument('--class_type', default='Style')  # Artist
+parser.add_argument('--style', default='./image/0728/tree.jpg')
+parser.add_argument('--output', default='./image/0728/out_1e6.png')
+parser.add_argument('--class_type', default='ori_vgg19')  # Artist
 parser.add_argument('--num_steps', type=int, default=300)
 parser.add_argument('--style_weight', type=float, default=1e6)
 parser.add_argument('--content_weight', type=float, default=1)
@@ -31,9 +51,10 @@ parser.add_argument('--content_folder', default='')
 parser.add_argument('--style_folder', default='')
 parser.add_argument('--output_folder', default='')
 parser.add_argument('--sum_img_name', default='')
-parser.add_argument('--content_layers', type=str, nargs='+')
-parser.add_argument('--style_layers', type=str, nargs='+')
+parser.add_argument('--content_layers', type=str, nargs='+', default=['1'])
+parser.add_argument('--style_layers', type=str, nargs='+', default=['1', '2', '3', '4', '5'])
 parser.add_argument('--lr', type=float, default=1)
+
 
 args = parser.parse_args()
 print(time.asctime(time.localtime(time.time())))
@@ -205,6 +226,8 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
             break
 
     model = model[:(i + 1)]
+    for i in model._modules.keys():
+        model._modules[i] = model._modules[i].to(device1)
 
     return model, style_losses, content_losses
 
@@ -264,6 +287,7 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
             return style_score + content_score
 
         optimizer.step(closure)
+        print('running')
 
     # a last correction...
     input_img.data.clamp_(0, 1)
