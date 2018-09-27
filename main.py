@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from PIL import Image, ImageFont, ImageDraw
-import matplotlib.pyplot as plt
 
 import torchvision.transforms as transforms
 import torchvision.models as models
@@ -15,9 +14,8 @@ import copy
 import os.path
 import torchvision.utils
 import time
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device0 = torch.device('cuda:0')
-device1 = torch.device('cuda:1')
+device = torch.device('cuda:0')
+
 # parser = argparse.ArgumentParser(description='PyTorch Neural-Style')
 # parser.add_argument('--content', default='')
 # parser.add_argument('--size', type=int, default=512)
@@ -61,8 +59,6 @@ print(time.asctime(time.localtime(time.time())))
 for name, value in vars(args).items():
     print('{} = {}'.format(name, value))
 
-
-
 # desired size of the output image
 imsize = args.size
 
@@ -76,8 +72,6 @@ def image_loader(image_name):
     # fake batch dimension required to fit network's input dimensions
     image = loader(image).unsqueeze(0)
     return image.to(device, torch.float)
-
-
 
 
 class ContentLoss(nn.Module):
@@ -165,8 +159,6 @@ class Normalization(nn.Module):
 content_layers_default = ['conv_'+i for i in args.content_layers]
 style_layers_default = ['conv_'+i for i in args.style_layers]
 
-print('content_layers_default={}'.format(content_layers_default))
-print('style_layers_default={}'.format(style_layers_default))
 
 def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
                                style_img, content_img,
@@ -210,6 +202,7 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
             # add content loss:
             target = model(content_img).detach()
             content_loss = ContentLoss(target)
+            del target
             model.add_module("content_loss_{}".format(i), content_loss)
             content_losses.append(content_loss)
 
@@ -217,6 +210,7 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
             # add style loss:
             target_feature = model(style_img).detach()
             style_loss = StyleLoss(target_feature)
+            del target_feature
             model.add_module("style_loss_{}".format(i), style_loss)
             style_losses.append(style_loss)
 
@@ -226,16 +220,8 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
             break
 
     model = model[:(i + 1)]
-    for i in model._modules.keys():
-        model._modules[i] = model._modules[i].to(device1)
 
     return model, style_losses, content_losses
-
-
-# if you want to use a white noise instead uncomment the below line:
-# input_img = torch.randn(content_img.data.size(), device=device)
-
-# add the original input image to the figure:
 
 
 def get_input_optimizer(input_img):
@@ -287,7 +273,6 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
             return style_score + content_score
 
         optimizer.step(closure)
-        print('running')
 
     # a last correction...
     input_img.data.clamp_(0, 1)
@@ -314,6 +299,7 @@ if args.mode == 'file':
     assert style_img.size() == content_img.size(), \
         "we need to import style and content images of the same size"
     input_img = content_img.clone()
+    input_img = torch.randn(content_img.data.size(), device=device)
     output, content_loss, style_loss = run_style_transfer(cnn, cnn_normalization_mean, cnn_normalization_std,
                                 content_img, style_img, input_img, num_steps=args.num_steps,
                                 style_weight=args.style_weight, content_weight=args.content_weight)
@@ -327,8 +313,8 @@ if args.mode == 'file':
               font=font, fill='#ffffff')
 
     img_sum = Image.new('RGB', (args.size*3, args.size), (255, 255, 255))
-    img_sum.paste(Image.open(args.style), (0, 0))
-    img_sum.paste(Image.open(args.content), (args.size, 0))
+    img_sum.paste(Image.open(args.style).resize((args.size, args.size)), (0, 0))
+    img_sum.paste(Image.open(args.content).resize((args.size, args.size)), (args.size, 0))
     img_sum.paste(output, (args.size*2, 0))
     img_sum.save(args.output)
     print('Save image {}'.format(args.output))
